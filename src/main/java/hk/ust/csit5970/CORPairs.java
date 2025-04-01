@@ -37,7 +37,8 @@ import java.util.HashMap;
  */
 public class CORPairs extends Configured implements Tool {
 	private static final Logger LOG = Logger.getLogger(CORPairs.class);
-
+    private final static IntWritable ONE = new IntWritable(1);
+    private static Text word = new Text();
 	/*
 	 * TODO: Write your first-pass Mapper here.
 	 */
@@ -53,6 +54,18 @@ public class CORPairs extends Configured implements Tool {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+			while (doc_tokenizer.hasMoreTokens()) {
+            	String token = doc_tokenizer.nextToken();
+            	Integer currentCount = word_set.get(token); // 先尝试获取当前值
+				if (currentCount == null) {
+					currentCount = 0; // 如果不存在，默认 0
+				}
+				word_set.put(token, currentCount + 1); // 更新计数
+        	}
+	        for (Map.Entry<String, Integer> entry : word_set.entrySet()) {
+            	word.set(entry.getKey());
+            	context.write(word, new IntWritable(entry.getValue()));
+        	}
 		}
 	}
 
@@ -61,12 +74,17 @@ public class CORPairs extends Configured implements Tool {
 	 */
 	private static class CORReducer1 extends
 			Reducer<Text, IntWritable, Text, IntWritable> {
-		@Override
-		public void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
-			/*
-			 * TODO: Your implementation goes here.
-			 */
-		}
+		private IntWritable result = new IntWritable();
+		
+		public void reduce(Text key, Iterable<IntWritable> values, Context context)
+            throws IOException, InterruptedException {
+        	int sum = 0; 
+        	for (IntWritable val : values) {
+            	sum += val.get(); 
+        	}
+        	result.set(sum); 
+        	context.write(key, result); 
+    	}
 	}
 
 
@@ -74,13 +92,42 @@ public class CORPairs extends Configured implements Tool {
 	 * TODO: Write your second-pass Mapper here.
 	 */
 	public static class CORPairsMapper2 extends Mapper<LongWritable, Text, PairOfStrings, IntWritable> {
+		private final static IntWritable ONE = new IntWritable(1);
+    	private Set<String> uniqueWords = new HashSet<String>();
 		@Override
 		protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
 			// Please use this tokenizer! DO NOT implement a tokenizer by yourself!
-			StringTokenizer doc_tokenizer = new StringTokenizer(value.toString().replaceAll("[^a-z A-Z]", " "));
+			StringTokenizer tokenizer = new StringTokenizer(value.toString().replaceAll("[^a-z A-Z]", " "));
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+			uniqueWords.clear();
+			while (tokenizer.hasMoreTokens()) {
+				String word = tokenizer.nextToken().trim();
+				if (!word.isEmpty()) {
+					uniqueWords.add(word);
+				}
+			}
+
+			// 生成所有唯一的单词对（避免重复计数）
+			List<String> words = new ArrayList<String>(uniqueWords);
+			for (int i = 0; i < words.size(); i++) {
+				for (int j = i + 1; j < words.size(); j++) {
+					String word1 = words.get(i);
+					String word2 = words.get(j);
+					
+					// 标准化单词对：按字典序排列，确保 (A,B) 和 (B,A) 视为同一个键
+					if (word1.compareTo(word2) > 0) {
+						String temp = word1;
+						word1 = word2;
+						word2 = temp;
+					}
+					
+					// 发射标准化后的单词对
+					PairOfStrings pair = new PairOfStrings(word1, word2);
+					context.write(pair, ONE);
+				}
+			}
 		}
 	}
 
@@ -88,11 +135,18 @@ public class CORPairs extends Configured implements Tool {
 	 * TODO: Write your second-pass Combiner here.
 	 */
 	private static class CORPairsCombiner2 extends Reducer<PairOfStrings, IntWritable, PairOfStrings, IntWritable> {
+		private IntWritable sumValue = new IntWritable();
 		@Override
 		protected void reduce(PairOfStrings key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+			int sum = 0;
+			for (IntWritable val : values) {
+				sum += val.get(); // 本地累加部分计数
+			}
+			sumValue.set(sum);
+			context.write(key, sumValue); // 发射合并后的结果
 		}
 	}
 
@@ -137,6 +191,8 @@ public class CORPairs extends Configured implements Tool {
 			}
 		}
 
+
+		private final static IntWritable freqAB = new IntWritable();
 		/*
 		 * TODO: write your second-pass Reducer here.
 		 */
@@ -145,6 +201,21 @@ public class CORPairs extends Configured implements Tool {
 			/*
 			 * TODO: Your implementation goes here.
 			 */
+			Iterator<IntWritable> iter = values.iterator();
+			int freqAB = 0;
+			while (iter.hasNext()) {
+				freqAB += iter.next().get();
+			}
+
+    		int freqA = word_total_map.get(key.getLeftElement());
+    		int freqB = word_total_map.get(key.getRightElement());
+
+			// 3. 计算COR(A,B)
+    		double cor = (double) freqAB / (freqA * freqB);
+
+			// 4. 发射结果
+    		context.write(key, new DoubleWritable(cor));
+
 		}
 	}
 
